@@ -7,19 +7,21 @@ from PyQt5.QtWidgets import QApplication, QWidget, QGridLayout, QLabel, QPushBut
 from PyQt5.QtCore import Qt, QTimer
 from functools import partial
 from copy import deepcopy
+import random
 
 from music_player.config import ConfigScreen
 from music_player.local_functions.time_functions import duration_from_seconds
 from music_player.song import Song
-from music_player.constants import PLAY_ICON, PAUSE_ICON, NEXT_ICON, PREVIOUS_ICON, ADD_FOLDER_ICON, UNKNOWN_ARTIST
+from music_player.constants import PLAY_ICON, PAUSE_ICON, NEXT_ICON, PREVIOUS_ICON, ADD_FOLDER_ICON, UNKNOWN_ARTIST, \
+    LOOP_INACTIVE_ICON, LOOP_ACTIVE_ICON, SHUFFLE_ACTIVE_ICON, SHUFFLE_INACTIVE_ICON
 
 
 class MainWindow(QWidget):
-
     playing = False
     playing_index = 0
     current_playing = ''
     elapsed_time = 0
+    loop = False
     songs = []
     playlist = []
     library_folders = []
@@ -28,6 +30,8 @@ class MainWindow(QWidget):
         super().__init__()
 
         # Config window
+        self.button_loop = QPushButton('')
+        self.button_shuffle = QPushButton('')
         self.config_window = ConfigScreen(self.library_folders)
 
         # song elapsed time timer
@@ -113,13 +117,18 @@ class MainWindow(QWidget):
         label_no_song_found = QLabel("Não encontramos nenhuma música")
         label_no_song_found.setStyleSheet("color: #B3B3B3")
 
+        container_horizontal_center = QHBoxLayout()
+        container_horizontal_center.setAlignment(Qt.AlignCenter)
+
         button_add_folder = QPushButton("")
         button_add_folder.setFixedSize(50, 50)
         button_add_folder.setStyleSheet("color: #F2F2F2; border-image : url({})".format(ADD_FOLDER_ICON))
         button_add_folder.clicked.connect(self.open_config)
 
+        container_horizontal_center.addWidget(button_add_folder)
+
         grid.addWidget(label_no_song_found)
-        grid.addWidget(button_add_folder)
+        grid.addLayout(container_horizontal_center)
 
         return container
 
@@ -154,10 +163,10 @@ class MainWindow(QWidget):
         label_duration = QLabel("{}".format(duration_from_seconds(song.duration)))
         label_duration.setStyleSheet("color:#B3B3B3")
 
-        grid.addWidget(button_play,    0, 0)
-        grid.addWidget(label_image,     0, 1)
-        grid.addWidget(label_song,     0, 2)
-        grid.addWidget(label_artist,   0, 4)
+        grid.addWidget(button_play, 0, 0)
+        grid.addWidget(label_image, 0, 1)
+        grid.addWidget(label_song, 0, 2)
+        grid.addWidget(label_artist, 0, 4)
         grid.addWidget(label_duration, 0, 5)
 
         return container
@@ -200,21 +209,36 @@ class MainWindow(QWidget):
         self.play_button.clicked.connect(self.player_controller)
         self.play_button.setFixedSize(24, 24)
 
+        buttons_container = QHBoxLayout()
+        buttons_container.setAlignment(Qt.AlignCenter)
+
+        self.button_shuffle.setCheckable(True)
+        self.button_shuffle.setStyleSheet("QPushButton{{border-image : url({});}} ".format(SHUFFLE_ACTIVE_ICON) +
+                                          "QPushButton:checked{{border-image: url({});}}".format(SHUFFLE_INACTIVE_ICON))
+        self.button_shuffle.setFixedSize(14, 14)
+        self.button_shuffle.clicked.connect(self.shuffle_controller)
+
         previous_button = QPushButton('')
         previous_button.setStyleSheet("border-image : url({});".format(PREVIOUS_ICON))
-        previous_button.setFixedSize(18, 18)
+        previous_button.setFixedSize(14, 14)
         previous_button.clicked.connect(self.previous_song)
 
         next_button = QPushButton('')
         next_button.setStyleSheet("border-image : url({});".format(NEXT_ICON))
-        next_button.setFixedSize(18, 18)
+        next_button.setFixedSize(14, 14)
         next_button.clicked.connect(self.next_song)
 
-        buttons_container = QHBoxLayout()
-        buttons_container.setAlignment(Qt.AlignCenter)
+        self.button_loop.setCheckable(True)
+        self.button_loop.setStyleSheet("QPushButton{{border-image : url({});}} ".format(LOOP_INACTIVE_ICON) +
+                                       "QPushButton:checked{{border-image: url({});}}".format(LOOP_ACTIVE_ICON))
+        self.button_loop.setFixedSize(14, 14)
+        self.button_loop.clicked.connect(self.loop_controller)
+
+        buttons_container.addWidget(self.button_loop)
         buttons_container.addWidget(previous_button)
         buttons_container.addWidget(self.play_button)
         buttons_container.addWidget(next_button)
+        buttons_container.addWidget(self.button_shuffle)
 
         container_playback.addLayout(buttons_container, 0, 1, 1, 2)
         container_playback.addWidget(self.label_current_song_elapsed, 1, 0)
@@ -259,6 +283,19 @@ class MainWindow(QWidget):
 
         return scroll
 
+    def shuffle_controller(self):
+        if self.button_shuffle.isChecked():
+            self.playing_index = -1
+            random.shuffle(self.playlist)
+        else:
+            self.playlist = deepcopy(self.songs)
+
+    def loop_controller(self):
+        if self.button_loop.isChecked():
+            mixer.music.play(loops=-1, start=self.elapsed_time)
+        else:
+            mixer.music.play(start=self.elapsed_time)
+
     def play_song(self, song):
         self.slider_elapsed_time.setEnabled(True)
         self.playing = True
@@ -271,6 +308,8 @@ class MainWindow(QWidget):
         # Swap current song to the start of the playlist
         song_index = [song.title for song in self.playlist].index(song.title)
         self.playing_index = song_index
+
+        self.shuffle_controller()
 
         pixmap = QPixmap(song.image).scaled(50, 50)
         self.image_label.setPixmap(pixmap)
@@ -291,17 +330,17 @@ class MainWindow(QWidget):
         if self.playing:
             self.playing = False
             self.update_timer.stop()
-            self.play_button.setStyleSheet("border-image : url({});".format(PAUSE_ICON))
+            self.play_button.setStyleSheet("border-image : url({});".format(PLAY_ICON))
             mixer.music.pause()
         else:
             self.playing = True
             self.update_timer.start(1000)
-            self.play_button.setStyleSheet("border-image : url({});".format(PLAY_ICON))
+            self.play_button.setStyleSheet("border-image : url({});".format(PAUSE_ICON))
             mixer.music.unpause()
 
     def change_volume(self):
         # Volume == slider/30 because there are 30 steps and mixer only accepts volume > 0 and volume < 1
-        volume = self.volume_slider.value()/30
+        volume = self.volume_slider.value() / 30
         mixer.music.set_volume(volume)
 
     def next_song(self):
@@ -339,6 +378,8 @@ class MainWindow(QWidget):
 
         self.songs.sort(key=lambda s: s.title)
         self.playlist = deepcopy(self.songs)
+        if self.button_shuffle.isChecked():
+            random.shuffle(self.playlist)
 
     def open_config(self):
         self.config_window = ConfigScreen(self.library_folders)
@@ -364,5 +405,3 @@ mw = MainWindow("Player")
 app.setStyle(QStyleFactory.create("fusion"))
 
 app.exec_()
-
-
