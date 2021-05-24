@@ -2,7 +2,7 @@ from PyQt5.QtCore import pyqtSignal
 from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QWidget, QVBoxLayout, QLabel, QHBoxLayout, QPushButton, QFileDialog
 
-from music_player.constants import ADD_FOLDER_ICON
+from constants import ADD_FOLDER_ICON
 
 
 class ConfigScreen(QWidget):

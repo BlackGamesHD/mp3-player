@@ -1,6 +1,6 @@
 import eyed3
 
-from music_player.constants import IMAGES_CACHE, UNKNOWN_ARTIST
+from constants import IMAGES_CACHE, UNKNOWN_ARTIST
 
 
 class Song:

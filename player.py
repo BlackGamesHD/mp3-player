@@ -1,23 +1,27 @@
 import glob
+import os
+from time import sleep
 
 from pygame import mixer
 from PyQt5.QtGui import QCursor, QIcon, QPixmap, QFont
 from PyQt5.QtWidgets import QApplication, QWidget, QGridLayout, QLabel, QPushButton, QVBoxLayout, \
-    QStyleFactory, QScrollArea, QSlider, QHBoxLayout
-from PyQt5.QtCore import Qt, QTimer
+    QStyleFactory, QScrollArea, QSlider, QHBoxLayout, QShortcut
+from PyQt5.QtCore import Qt, QTimer, QObject, pyqtSignal, pyqtSlot, QThread
 from functools import partial
 from copy import deepcopy
 import random
 
-from music_player.config import ConfigScreen
-from music_player.local_functions.time_functions import duration_from_seconds
-from music_player.song import Song
-from music_player.constants import PLAY_ICON, PAUSE_ICON, NEXT_ICON, PREVIOUS_ICON, ADD_FOLDER_ICON, UNKNOWN_ARTIST, \
-    LOOP_INACTIVE_ICON, LOOP_ACTIVE_ICON, SHUFFLE_ACTIVE_ICON, SHUFFLE_INACTIVE_ICON
+from config import ConfigScreen
+from local_functions.time_functions import duration_from_seconds
+from song import Song
+from constants import PLAY_ICON, PAUSE_ICON, NEXT_ICON, PREVIOUS_ICON, ADD_FOLDER_ICON, UNKNOWN_ARTIST, \
+    LOOP_INACTIVE_ICON, LOOP_ACTIVE_ICON, SHUFFLE_ACTIVE_ICON, SHUFFLE_INACTIVE_ICON, IMAGES_CACHE
 
 
 class MainWindow(QWidget):
-    playing = False
+    signal_processed = pyqtSignal()
+
+    is_paused = False
     playing_index = 0
     current_playing = ''
     elapsed_time = 0
@@ -28,6 +32,18 @@ class MainWindow(QWidget):
 
     def __init__(self, title):
         super().__init__()
+
+        # Threads
+        self.song_worker_thread = QThread()
+        self.song_worker = SongWorker()
+
+        self.song_worker.moveToThread(self.song_worker_thread)
+
+        self.signal_processed.connect(partial(self.song_worker.check_song_end, self.is_paused))
+        self.song_worker.player_tick.connect(self.player_tick_controller)
+
+        self.song_worker_thread.start()
+
 
         # Config window
         self.button_loop = QPushButton('')
@@ -67,19 +83,16 @@ class MainWindow(QWidget):
         container.setLayout(grid)
         grid.setContentsMargins(0, 0, 0, 0)
 
-        try:
-            grid.addWidget(self.song_list_header(), 0, 0)
-            grid.addWidget(self.songs_list(), 1, 0)
-        except Exception as e:
-            print(e)
+        grid.addWidget(self.song_list_header(), 0, 0)
+        grid.addWidget(self.songs_list(), 1, 0)
 
         return container
 
     @staticmethod
     def song_list_header():
         grid = QGridLayout()
-        containter = QWidget()
-        containter.setLayout(grid)
+        container = QWidget()
+        container.setLayout(grid)
         grid.setContentsMargins(0, 10, 0, 10)
         grid.setColumnStretch(1, 2)
         grid.setColumnStretch(2, 1)
@@ -105,7 +118,7 @@ class MainWindow(QWidget):
         grid.addWidget(label_header_artist, 0, 2)
         grid.addWidget(label_header_duration, 0, 3)
 
-        return containter
+        return container
 
     def no_song_container(self):
         container = QWidget()
@@ -205,7 +218,9 @@ class MainWindow(QWidget):
         self.label_current_song_elapsed.setStyleSheet("color: #F2F2F2")
         self.label_current_song_duration.setStyleSheet("color: #F2F2F2")
 
-        self.play_button.setStyleSheet("border-image : url({});".format(PAUSE_ICON))
+        self.play_button.setStyleSheet("QPushButton{{border-image : url({});}} ".format(PAUSE_ICON) +
+                                       "QPushButton:checked{{border-image: url({});}}".format(PLAY_ICON))
+        self.play_button.setCheckable(True)
         self.play_button.clicked.connect(self.player_controller)
         self.play_button.setFixedSize(24, 24)
 
@@ -298,18 +313,18 @@ class MainWindow(QWidget):
 
     def play_song(self, song):
         self.slider_elapsed_time.setEnabled(True)
-        self.playing = True
+        self.is_paused = False
         self.elapsed_time = 0
         self.label_current_song_elapsed.setText("00:00")
         self.slider_elapsed_time.setValue(0)
         self.slider_elapsed_time.setMaximum(song.duration)
         self.update_timer.start(1000)
 
+        self.signal_processed.emit()
+
         # Swap current song to the start of the playlist
         song_index = [song.title for song in self.playlist].index(song.title)
         self.playing_index = song_index
-
-        self.shuffle_controller()
 
         pixmap = QPixmap(song.image).scaled(50, 50)
         self.image_label.setPixmap(pixmap)
@@ -327,15 +342,12 @@ class MainWindow(QWidget):
         self.label_current_song_elapsed.setText(duration_from_seconds(self.elapsed_time))
 
     def player_controller(self):
-        if self.playing:
-            self.playing = False
+        if self.play_button.isChecked():
+            self.is_paused = True
             self.update_timer.stop()
-            self.play_button.setStyleSheet("border-image : url({});".format(PLAY_ICON))
             mixer.music.pause()
         else:
-            self.playing = True
             self.update_timer.start(1000)
-            self.play_button.setStyleSheet("border-image : url({});".format(PAUSE_ICON))
             mixer.music.unpause()
 
     def change_volume(self):
@@ -367,6 +379,7 @@ class MainWindow(QWidget):
         # Volume == slider/30 because there are 30 steps and mixer only accepts volume > 0 and volume < 1
         timestamp = self.slider_elapsed_time.value()
         self.elapsed_time = timestamp
+        self.label_current_song_elapsed.setText(duration_from_seconds(timestamp))
         mixer.music.play(start=timestamp)
 
     def scan_songs(self):
@@ -398,6 +411,25 @@ class MainWindow(QWidget):
 
         self.songs_container = temp_container
 
+    def player_tick_controller(self):
+        if not mixer.music.get_busy() and not self.is_paused:
+            self.next_song()
+        self.signal_processed.emit()
+
+
+class SongWorker(QObject):
+
+    player_tick = pyqtSignal()
+
+    def check_song_end(self, paused):
+        sleep(1)
+        self.player_tick.emit()
+
+
+def clear_cache():
+    for temp_file in glob.glob(f"{IMAGES_CACHE}/*"):
+        os.remove(temp_file)
+
 
 mixer.init()
 app = QApplication([])
@@ -405,3 +437,5 @@ mw = MainWindow("Player")
 app.setStyle(QStyleFactory.create("fusion"))
 
 app.exec_()
+
+clear_cache()
